@@ -1,6 +1,6 @@
 /*
  * Nic Ball
- * Updated 02/26/26
+ * Updated 03/04/26
  * ECE 433
  *
  * General HAL utilities built during the labs for this course.
@@ -11,6 +11,7 @@
 
 #include "stm32l552xx.h"
 
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -35,122 +36,19 @@ void irq_disable(IRQn_Type irqn) {
     __enable_irq();
 }
 
-// CLOCKS
-
-void clocks_enable() {
-    // Enable Clock to SYSCFG & EXTI
-    RCC->APB2ENR |= 1;
-    // Power interface clock
-    RCC->APB1ENR1 |= 1 << 28;
-    // LPUART1 clock
-    RCC->APB1ENR2 |= 0x1;
-    // LPUART1 clock = HSI16
-    RCC->CCIPR1 |= 0x800;
-    RCC->CCIPR1 &= ~0x400;
-    // SYSCLK = HSI16
-    RCC->CFGR |= 0x1;
-    // Enable MSI + HSI16
-    RCC->CR |= 0x161;
-    // Enable Clock to SYSCFG & EXTI
-    RCC->APB2ENR |= 1;
-}
-
-// TIMERS
-
-// SysTick delay with ms resolution.
-void delay_ms(uint32_t ms) {
-    SysTick->CTRL = 0;
-    // Use processor clock.
-    SysTick->CTRL |= SysTick_CTRL_CLKSOURCE_Msk;
-    // 1ms interval, subtracting 1 as per the manual:
-    // ```
-    // To generate a multi-shot timer with a period of N processor clock cycles,
-    // use a RELOAD value of N-1. For example, if the SysTick interrupt is required
-    // every 100 clock pulses, set RELOAD to 99.
-    // ```
-    SysTick->LOAD = 16000 - 1;
-    // Reset val which also resets `SysTick_CTRL_COUNTFLAG_Pos`.
-    SysTick->VAL = 0;
-    SysTick->CTRL |= SysTick_CTRL_ENABLE_Msk;
-    // For every `ms`, wait for the timer to count down.
-    for (int i = 0; i < ms; i++) {
-        // Reading `CTRL` seems to reset this value because this code works, but
-        // the manual isn't explicit about this.
-        while (!BIT_READ(SysTick->CTRL, SysTick_CTRL_COUNTFLAG_Pos)) {}
-    }
-}
-
-typedef enum {
-    TIM_TIM1,
-    TIM_TIM4,
-} Tim;
-
-typedef enum {
-    TIM_INTERRUPT_NONE = 0,
-    TIM4_INTERRUPT_DISABLE,
-    TIM4_INTERRUPT_ENABLE,
-} Tim_Interrupt;
-
-// Configure `tim` to fire every `ms` and optionally enable the `TIM4_IRQn`.
-void tim_enable_ms(Tim tim, Tim_Interrupt interrupt, uint32_t ms) {
-    // Enable tim clock
-    switch (tim) {
-    case TIM_TIM1: {
-        BIT_SET(RCC->APB2ENR, RCC_APB2ENR_TIM1EN_Pos);
-        break;
-    }
-    case TIM_TIM4: {
-        BIT_SET(RCC->APB1ENR1, RCC_APB1ENR1_TIM4EN_Pos);
-        break;
-    }
-    }
-
-    TIM_TypeDef* tp;
-    switch (tim) {
-    case TIM_TIM1: {
-        tp = TIM1;
-        break;
-    }
-    case TIM_TIM4: {
-        tp = TIM4;
-        break;
-    }
-    default:
-        return;
-    }
-
-    tp->CR1 = 0;
-    // 1ms tick
-    tp->PSC = 16 * 1000 - 1;
-    tp->ARR = ms - 1;
-    // Clear counter
-    tp->CNT = 0;
-    switch (interrupt) {
-    case TIM_INTERRUPT_NONE: {
-        break;
-    }
-    case TIM4_INTERRUPT_ENABLE: {
-        // Set update interrupt enable
-        TIM4->DIER |= 1;
-        irq_enable(TIM4_IRQn, 0);
-        break;
-    }
-    case TIM4_INTERRUPT_DISABLE:
-    default: {
-        // NOTE: Don't actually disable, I haven't checked if there is a hander here
-        // that does something important!
-        // TODO: This will not behave as expected if configured later.
-    }
-    }
-    // Enable tim
-    BIT_SET(tp->CR1, TIM_CR1_CEN_Pos);
-}
-
 // GPIO
 
 #define PIN_TOGGLE(GPIOX, PIN) BIT_TOGGLE((GPIOX)->ODR, (PIN))
 #define PIN_HIGH(GPIOX, PIN) BIT_SET((GPIOX)->ODR, (PIN))
 #define PIN_LOW(GPIOX, PIN) BIT_CLEAR((GPIOX)->ODR, (PIN))
+#define PIN_SET(GPIOX, PIN, COND) \
+    do {                          \
+        if (COND) {               \
+            PIN_HIGH(GPIOX, PIN); \
+        } else {                  \
+            PIN_LOW(GPIOX, PIN);  \
+        }                         \
+    } while (0)
 #define PIN_READ(GPIOX, PIN) BIT_READ((GPIOX)->IDR, (PIN))
 
 // Enable the clocks for the A, B, C, and E GPIO ports.
@@ -275,6 +173,106 @@ void gpio_configure_push_pull_low_speed(GPIO_TypeDef* port, uint32_t pin, GPIO_M
                        GPIO_PULLUPDOWN_NO_PULLUP_DOWN);
 }
 
+// CLOCKS
+
+void clocks_enable() {
+    // Enable Clock to SYSCFG & EXTI
+    RCC->APB2ENR |= 1;
+    // Power interface clock
+    RCC->APB1ENR1 |= 1 << 28;
+    // LPUART1 clock
+    RCC->APB1ENR2 |= 0x1;
+    // LPUART1 clock = HSI16
+    RCC->CCIPR1 |= 0x800;
+    RCC->CCIPR1 &= ~0x400;
+    // SYSCLK = HSI16
+    RCC->CFGR |= 0x1;
+    // Enable MSI + HSI16
+    RCC->CR |= 0x161;
+    // Enable Clock to SYSCFG & EXTI
+    RCC->APB2ENR |= 1;
+    gpio_clocks_enable();
+}
+
+// TIMERS
+
+// SysTick delay with ms resolution.
+void delay_ms(uint32_t ms) {
+    SysTick->CTRL = 0;
+    // Use processor clock.
+    SysTick->CTRL |= SysTick_CTRL_CLKSOURCE_Msk;
+    // 1ms interval, subtracting 1 as per the manual:
+    // ```
+    // To generate a multi-shot timer with a period of N processor clock cycles,
+    // use a RELOAD value of N-1. For example, if the SysTick interrupt is required
+    // every 100 clock pulses, set RELOAD to 99.
+    // ```
+    SysTick->LOAD = 16000 - 1;
+    // Reset val which also resets `SysTick_CTRL_COUNTFLAG_Pos`.
+    SysTick->VAL = 0;
+    SysTick->CTRL |= SysTick_CTRL_ENABLE_Msk;
+    // For every `ms`, wait for the timer to count down.
+    for (int i = 0; i < ms; i++) {
+        // Reading `CTRL` seems to reset this value because this code works, but
+        // the manual isn't explicit about this.
+        while (!BIT_READ(SysTick->CTRL, SysTick_CTRL_COUNTFLAG_Pos)) {}
+    }
+}
+
+// Configure `tim` to fire every `period`/`prescalar` and enable `interrupt`.
+void tim_enable_interrupt(TIM_TypeDef* tim, IRQn_Type interrupt, uint32_t period,
+                          uint32_t prescalar) {
+    // Enable tim clock
+    switch ((uint32_t)tim) {
+    case (uint32_t)TIM1: {
+        BIT_SET(RCC->APB2ENR, RCC_APB2ENR_TIM1EN_Pos);
+        break;
+    }
+    case (uint32_t)TIM4: {
+        BIT_SET(RCC->APB1ENR1, RCC_APB1ENR1_TIM4EN_Pos);
+        break;
+    }
+    // TODO: panic?
+    default:
+        return;
+    }
+
+    tim->CR1 = 0;
+    tim->PSC = 16 * prescalar - 1;
+    tim->ARR = period - 1;
+    tim->CNT = 0;
+    BIT_SET(tim->DIER, TIM_DIER_UIE_Pos);
+    irq_enable(interrupt, 0);
+    BIT_SET(tim->CR1, TIM_CR1_CEN_Pos);
+}
+
+// Configure `tim` to fire every `period`/`prescalar`.
+void tim_enable(TIM_TypeDef* tim, uint32_t period, uint32_t prescalar) {
+    // Enable tim clock
+    switch ((uint32_t)tim) {
+    case (uint32_t)TIM1: {
+        BIT_SET(RCC->APB2ENR, RCC_APB2ENR_TIM1EN_Pos);
+        break;
+    }
+    case (uint32_t)TIM4: {
+        BIT_SET(RCC->APB1ENR1, RCC_APB1ENR1_TIM4EN_Pos);
+        break;
+    }
+    // TODO: panic?
+    default:
+        return;
+    }
+
+    tim->CR1 = 0;
+    // 1ms tick
+    tim->PSC = 16 * prescalar - 1;
+    tim->ARR = period - 1;
+    // Clear counter
+    tim->CNT = 0;
+    // Enable tim
+    BIT_SET(tim->CR1, TIM_CR1_CEN_Pos);
+}
+
 // LPUART
 
 typedef enum {
@@ -284,7 +282,7 @@ typedef enum {
 
 // Enable the LPUART with pins PG7 and PG8 at 115200 baud rate, optionally enabling
 // the `LPUART1_IRQn`.
-void lpuart_enable(LPUart_Interrupt interrupt) {
+void lpuart_enable(LPUart_Interrupt interrupt, uint32_t baud) {
     // Enable Clock to PWR Interface
     BIT_SET(RCC->APB1ENR1, 28);
     // Enable Clock to GPIOG
@@ -316,10 +314,7 @@ void lpuart_enable(LPUart_Interrupt interrupt) {
     BIT_CLEAR(GPIOG->AFR[1], 0);
 
     // Initialize LPUART
-    // NOTE: The spec says 57600 baud rate, but that is not a whole number here,
-    // so I will keep the 115200 configuration.
-    // 256*16000000/115200 = 35555
-    LPUART1->BRR = 35555;
+    LPUART1->BRR = 256u * 16000000u / baud;
     // The order here is very sensitive, and this section gave me a lot of trouble.
     //
     // In the original code, the CR1 is configured with 0xD, which enables RE, TE,
@@ -340,6 +335,33 @@ void lpuart_enable(LPUart_Interrupt interrupt) {
         // that does something important!
         // TODO: This will not behave as expected if configured later.
     }
+    }
+}
+
+void lpuart_blocking_print(char* string) {
+    char* buf = string;
+    while (*buf) {
+        // If TXFIFO is not full, we can write a byte to it.
+        if (BIT_READ(LPUART1->ISR, USART_CR1_TXEIE_TXFNFIE_Pos) == 1) {
+            LPUART1->TDR = *buf++;
+        }
+    }
+}
+
+static char _lpuart_blocking_printf_buf[64];
+void lpuart_blocking_printf(const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    char* buf = _lpuart_blocking_printf_buf;
+    vsnprintf(buf, sizeof(_lpuart_blocking_printf_buf), fmt, args);
+    va_end(args);
+    lpuart_blocking_print(buf);
+}
+
+void lpuart_blocking_byte(uint8_t byte) {
+    // If TXFIFO is not full, we can write a byte to it.
+    if (BIT_READ(LPUART1->ISR, USART_CR1_TXEIE_TXFNFIE_Pos) == 1) {
+        LPUART1->TDR = byte;
     }
 }
 
@@ -384,24 +406,46 @@ void button_enable(Button_Interrupt interrupt) {
 
 // ADC
 
+// The variant data refers to ADC connectivity, INPx.
 typedef enum {
     ADC_IN_PC0 = 1,
     ADC_IN_PC1 = 2,
+    ADC_IN_PA2 = 7,
+    ADC_IN_PA4 = 9,
+    ADC_IN_OPAMP1 = 8,
 } ADC_In;
 
 void configure_adc_pin(ADC_In channel) {
-    uint8_t pin = (channel == ADC_IN_PC0) ? 0 : 1;
-    gpio_configure_push_pull_low_speed(GPIOC, pin, GPIO_MODE_ANALOG);
+    switch (channel) {
+    case ADC_IN_PC0: {
+        gpio_configure_push_pull_low_speed(GPIOC, 0, GPIO_MODE_ANALOG);
+        break;
+    }
+    case ADC_IN_PC1: {
+        gpio_configure_push_pull_low_speed(GPIOC, 1, GPIO_MODE_ANALOG);
+        break;
+    }
+    case ADC_IN_PA2: {
+        gpio_configure_push_pull_low_speed(GPIOA, 2, GPIO_MODE_ANALOG);
+        break;
+    }
+    case ADC_IN_PA4: {
+        gpio_configure_push_pull_low_speed(GPIOA, 4, GPIO_MODE_ANALOG);
+        break;
+    }
+    default:
+        return;
+    }
 }
 
 typedef enum {
     ADC_INJECT_NONE = 0,
     ADC_INJECT_PC0 = 1,
-    ADC_INJECT_PC1 = 2,
+    ADC_INJECT_PC1 = 9,
 } ADC_Inject;
 
 void adc_enable_ext_trig(ADC_TypeDef* adc, ADC_In channel, uint32_t ms, ADC_Inject inject) {
-    tim_enable_ms(TIM_TIM1, TIM4_INTERRUPT_ENABLE, ms);
+    tim_enable_interrupt(TIM1, TIM4_IRQn, ms, 1000);
     // Set output to toggle on match
     TIM1->CCMR1 = 0x30;
     // Output will toggle when CNT==CCR1
@@ -456,12 +500,17 @@ void adc_enable_ext_trig(ADC_TypeDef* adc, ADC_In channel, uint32_t ms, ADC_Inje
     // Wait until ADC is ready
     while (BIT_READ(adc->ISR, ADC_ISR_ADRDY_Pos) == 0) {}
     // Start Conversion
-    BIT_SET(adc->CR, 2);
+    BIT_SET(adc->CR, ADC_CR_ADSTART_Pos);
     // Enable TIM1
     TIM1->CR1 = 1;
 }
 
-void adc_enable(ADC_TypeDef* adc, ADC_In channel) {
+typedef enum {
+    ADC_MODE_SINGLE,
+    ADC_MODE_SINGLE_CONTINUOUS,
+} ADC_Mode;
+
+void adc_enable(ADC_TypeDef* adc, ADC_In channel, ADC_Mode mode) {
     configure_adc_pin(channel);
     // Enable ADC Clock
     BIT_SET(RCC->AHB2ENR, RCC_AHB2ENR_ADCEN_Pos);
@@ -474,10 +523,25 @@ void adc_enable(ADC_TypeDef* adc, ADC_In channel) {
     delay_ms(10);
     // Set up ADC
     adc->SQR1 = (channel << ADC_SQR1_SQ1_Pos);
+    if (mode == ADC_MODE_SINGLE_CONTINUOUS) {
+        BIT_SET(adc->CFGR, ADC_CFGR_CONT_Pos);
+        // enable overrun
+        BIT_SET(adc->CFGR, ADC_CFGR_OVRMOD_Pos);
+    }
+
+    // calibrate
+    BIT_CLEAR(adc->CR, ADC_CR_ADEN_Pos);
+    BIT_SET(adc->CR, ADC_CR_ADCAL_Pos);
+    while (BIT_READ(adc->CR, ADC_CR_ADCAL_Pos)) {}
+
     // Enable ADC
     BIT_SET(adc->CR, ADC_CR_ADEN_Pos);
     // Wait until ADC is ready
     while (BIT_READ(adc->ISR, ADC_ISR_ADRDY_Pos) == 0) {}
+    if (mode == ADC_MODE_SINGLE_CONTINUOUS) {
+        // start conversion
+        BIT_SET(adc->CR, ADC_CR_ADSTART_Pos);
+    }
 }
 
 // Read from the `adc` injected data register.
@@ -491,19 +555,58 @@ uint32_t adc_inject_blocking_read(ADC_TypeDef* adc) {
     return ADC1->JDR1;
 }
 
+// Read from the `adc` regular data register in continuous mode.
+uint32_t adc_continuous_read(ADC_TypeDef* adc) {
+    // Result is 12 bits, so the value is masked
+    return (adc->DR) & 0xfff;
+}
+
 // Read from the `adc` regular data register.
 uint32_t adc_blocking_read(ADC_TypeDef* adc) {
     // Start conversion
     BIT_SET(adc->CR, ADC_CR_ADSTART_Pos);
     // Wait for conversion complete
     while (BIT_READ(adc->ISR, ADC_ISR_EOC_Pos) == 0) {}
-    // Read result and clear EOC
-    // Result is 12 bits, so the value is masked
-    return (adc->DR) & 0xfff;
+    return adc_continuous_read(adc);
 }
 
 float adc_norm(uint32_t adc_value) {
     return (float)adc_value * (1.0f / 4095.0f);
+}
+
+// DAC
+
+typedef enum {
+    DAC1_MODE_EXTERNAL_BUFFER = 0,
+    DAC1_MODE_EXTERNAL_INTERNAL_BUFFER = 1,
+    DAC1_MODE_EXTERNAL = 2,
+    DAC1_MODE_INTERNAL = 3,
+} DAC1_Mode;
+
+void dac_ch1_enable(DAC1_Mode mode) {
+    // CH1 is connected to PA4
+    gpio_configure_push_pull_low_speed(GPIOA, 4, GPIO_MODE_ANALOG);
+    // enable DAC clock
+    BIT_SET(RCC->APB1ENR1, RCC_APB1ENR1_DAC1EN_Pos);
+    // allow DAC CH1 internal connections
+    DAC1->MCR &= ~DAC_MCR_MODE1_Msk;
+    DAC1->MCR |= (mode << DAC_MCR_MODE1_Pos);
+    // enable DAC
+    BIT_SET(DAC1->CR, DAC_CR_EN1_Pos);
+}
+
+void dac_write(DAC_TypeDef* dac, uint32_t data) {
+    dac->DHR12R1 = data;
+}
+
+// PERIPHERALS
+
+float mcp9701_to_fahrenheit(uint32_t adc_value) {
+    float vout = adc_norm(adc_value) * 3.3;
+    float tc = 0.0195f;
+    float v0 = 0.4f;
+    float ta_celsius = (vout - v0) / tc;
+    return (ta_celsius * 1.8) + 32.0f;
 }
 
 #endif // HAL_H
