@@ -1,6 +1,6 @@
 /*
  * Nic Ball
- * Updated 03/04/26
+ * Updated 03/13/26
  * ECE 433
  *
  * General HAL utilities built during the labs for this course.
@@ -358,11 +358,9 @@ void lpuart_blocking_printf(const char* fmt, ...) {
     lpuart_blocking_print(buf);
 }
 
-void lpuart_blocking_byte(uint8_t byte) {
-    // If TXFIFO is not full, we can write a byte to it.
-    if (BIT_READ(LPUART1->ISR, USART_CR1_TXEIE_TXFNFIE_Pos) == 1) {
-        LPUART1->TDR = byte;
-    }
+uint8_t lpuart_blocking_read(void) {
+    while (!BIT_READ(LPUART1->ISR, USART_ISR_RXNE_RXFNE_Pos)) {}
+    return LPUART1->RDR;
 }
 
 // NOTE: I am aware there is a library to link with for this but I don't want to
