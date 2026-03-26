@@ -1,172 +1,168 @@
+/*
+ * Nic Ball
+ * 03/13/26
+ * ECE 433
+ */
+
+#include "hal.h"
 #include "stm32l552xx.h"
 
-// Some helper macros
-#define bitset(word,   idx)  ((word) |=  (1<<(idx))) //Sets the bit number <idx> -- All other bits are not affected.
-#define bitclear(word, idx)  ((word) &= ~(1<<(idx))) //Clears the bit number <idx> -- All other bits are not affected.
-#define bitflip(word,  idx)  ((word) ^=  (1<<(idx))) //Flips the bit number <idx> -- All other bits are not affected.
-#define bitcheck(word, idx)  ((word>>idx) &    1   ) //Checks the bit number <idx> -- 0 means clear; !0 means set.
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdio.h>
 
-// Loopback configuration to demo using SPI as a master or slave
-//
-// SPI2 (Master):
-//     MOSI --> PD4  (Green) --------------+
-//     MISO <-- PC2 (Blue) ------------+   |
-//     SS   --> PD0 (Yellow) ------+   |   |
-//     SCLK --> PD3 (Red) ------+  |   |   |
-//                              |  |   |   |
-// SPI3 (Slave):                |  |   |   |
-//     SCLK <-- PC10  ----------+  |   |   |
-//     SS   <-- PA4  --------------+   |   |
-//     MISO --> PC11 ------------------+   |
-//     MOSI <-- PD6  ----------------------+
-//
+#define BUF_LEN 127
+#define PINS 4
+#define CS 12
+#define SDO 14
+#define SDI 15
+#define SCK 13
 
-void initSPI2M(); // Initialize SPI2 as master
-void initSPI3S(); // Initialize SPI3 as slave
-void initLED();
-void RLEDset();
-void GLEDtoggle();
+// The relevant commands from the 25LC010A datasheet:
+// https://ww1.microchip.com/downloads/en/DeviceDoc/21832H.pdf
+typedef enum {
+    INSTR_READ = 0b011,
+    INSTR_WRITE = 0b010,
+    INSTR_WREN = 0b110,
+    INSTR_RDSR = 0b101,
+} Instr;
 
-int main(){
-	RCC->AHB2ENR  |= 0b1111111;   // Enable the clock of the GPIOs ABCDEFG
-	RCC->APB1ENR1 |=(3<<14);      // Enable the clock of SPI2 and SPI3
-	initLED();
-
-	// Configure SPI2 as MASTER using MOTOROLA frame format
-	initSPI2M();
-
-	// Configure SPI3 as SLAVE using MOTOROLA frame format
-	initSPI3S();
-
-	uint16_t tx_data=0x1000;
-	uint16_t rx_data;
-
-
-	while(1){
-		SPI2->DR = tx_data;
-		for(int i =0; i<100;i++); //some delay to allow SPI2 to send the data
-
-		//SPI3 should have received the data by now
-		if (SPI3->SR & 0x1){
-			rx_data=SPI3->DR;
-			if (rx_data!=tx_data) RLEDset();   // Check the data, RED is not match
-			else                  GLEDtoggle();   // Toggle GREEN if matches
-		}
-		tx_data+=1;
-
-	}
-
-	return 0;
+uint32_t spi(uint32_t byte) {
+    // NOTE: The data transfer depends on the type that is written to DR, so I
+    // am casting to bytes.
+    while (!BIT_READ(SPI1->SR, SPI_SR_TXE_Pos)) {}
+    *(uint8_t*)&SPI1->DR = byte;
+    while (!BIT_READ(SPI1->SR, SPI_SR_RXNE_Pos)) {}
+    return *(uint8_t*)&SPI1->DR;
 }
 
-// Initialize SPI2 as master
-void initSPI2M(){
-	//////  MOSI --> PD4
-	bitclear(GPIOD->MODER,  4*2  );  // 0b10 for AF
-	bitset(  GPIOD->MODER,  4*2+1);
-	bitset(  GPIOD->AFR[0], 4*4  ); // Use AF5 for SPI2_MOSI 0b0101
-	bitclear(GPIOD->AFR[0], 4*4+1);
-	bitset(  GPIOD->AFR[0], 4*4+2);
-	bitclear(GPIOD->AFR[0], 4*4+3);
-	bitset(  GPIOD->OSPEEDR,4*2);  // OSPEEDR 0b11  -- SPI runs fast, so you need to run
-	bitset(  GPIOD->OSPEEDR,4*2+1);// GPIO drivers
+// Write `byte` to `addr` in the 25LC010A.
+void write_addr(uint32_t addr, uint32_t byte) {
+    // enable write latch
+    PIN_LOW(GPIOE, CS);
+    spi(INSTR_WREN);
+    while (BIT_READ(SPI1->SR, SPI_SR_BSY_Pos)) {}
+    PIN_HIGH(GPIOE, CS);
 
-	//////  MISO <-- PC2
-	bitclear(GPIOC->MODER,  2*2  );  // 0b10 for AF
-	bitset(  GPIOC->MODER,  2*2+1);
-	bitset(  GPIOC->AFR[0], 2*4  ); // Use AF5 for SPI2_MISO 0b0101
-	bitclear(GPIOC->AFR[0], 2*4+1);
-	bitset(  GPIOC->AFR[0], 2*4+2);
-	bitclear(GPIOC->AFR[0], 2*4+3);
-	bitset(  GPIOC->OSPEEDR,2*2);  // OSPEEDR 0b11
-	bitset(  GPIOC->OSPEEDR,2*2+1);
+    // write `byte` to `addr`
+    PIN_LOW(GPIOE, CS);
+    spi(INSTR_WRITE);
+    spi(addr);
+    spi(byte);
+    while (BIT_READ(SPI1->SR, SPI_SR_BSY_Pos)) {}
+    PIN_HIGH(GPIOE, CS);
 
-	//////  SS   --> PD0
-	bitclear(GPIOD->MODER,  0*2  );  // 0b10 for AF
-	bitset(  GPIOD->MODER,  0*2+1);
-	bitset(  GPIOD->AFR[0], 0*4  ); // Use AF5 for SPI2_SS 0b0101
-	bitclear(GPIOD->AFR[0], 0*4+1);
-	bitset(  GPIOD->AFR[0], 0*4+2);
-	bitclear(GPIOD->AFR[0], 0*4+3);
-	bitset(  GPIOD->OSPEEDR,0*2);  // OSPEEDR 0b11
-	bitset(  GPIOD->OSPEEDR,0*2+1);
-
-	//////  SCLK --> PD3
-	bitclear(GPIOD->MODER,  3*2  );  // 0b10 for AF
-	bitset(  GPIOD->MODER,  3*2+1);
-	bitset(  GPIOD->AFR[0], 3*4  ); // Use AF3 for SPI2_SS 0b0011
-	bitset(  GPIOD->AFR[0], 3*4+1);
-	bitclear(GPIOD->AFR[0], 3*4+2);
-	bitclear(GPIOD->AFR[0], 3*4+3);
-	bitset(  GPIOD->OSPEEDR,3*2);  // OSPEEDR 0b11
-	bitset(  GPIOD->OSPEEDR,3*2+1);
-
-	SPI2->CR2 |= (0xf<<8)|(3<<2); // CR2[11:8]= 0b1111    16-bit data size
-                                  // CR2[2] = 0b1         SSOE: SS output enable
-	                              // CR2[3] = 0b1         NSSP: NSS pulse management. In the case of a single data transfer, it forces the NSS pin high level after the transfer.
-
-	SPI2->CR1 |= (1<<2)|(1<<6); // CR1[2] Master
-                                // CR1[6] Enable SPI
-
+    // wait for the data to be written
+    for (;;) {
+        PIN_LOW(GPIOE, CS);
+        spi(INSTR_RDSR);
+        uint32_t sr = spi(0);
+        while (BIT_READ(SPI1->SR, SPI_SR_BSY_Pos)) {}
+        PIN_HIGH(GPIOE, CS);
+        // bit 0 is the WIP flag, if false, the write is finished
+        if (!BIT_READ(sr, 0)) {
+            return;
+        }
+    }
 }
 
-// Initialize SPI3 as slave
-void initSPI3S(){
-
-	//     SCLK <-- PC10
-	bitclear(GPIOC->MODER,  10*2  );  // 0b10 for AF
-	bitset(  GPIOC->MODER,  10*2+1);
-	bitclear(GPIOC->AFR[1], 2*4  ); // Use AF6 for SPI3_SCLK 0b0110
-	bitset(  GPIOC->AFR[1], 2*4+1);
-	bitset(  GPIOC->AFR[1], 2*4+2);
-	bitclear(GPIOC->AFR[1], 2*4+3);
-	bitset(  GPIOC->OSPEEDR,10*2);  // OSPEEDR 0b11
-	bitset(  GPIOC->OSPEEDR,10*2+1);
-
-	//     SS   <-- PA4
-	bitclear(GPIOA->MODER,  4*2  );  // 0b10 for AF
-	bitset(  GPIOA->MODER,  4*2+1);
-	bitclear(GPIOA->AFR[0], 4*4  ); // Use AF6 for SPI3_SS 0b0110
-	bitset(  GPIOA->AFR[0], 4*4+1);
-	bitset(  GPIOA->AFR[0], 4*4+2);
-	bitclear(GPIOA->AFR[0], 4*4+3);
-	bitset(  GPIOA->OSPEEDR,4*2);  // OSPEEDR 0b11
-	bitset(  GPIOA->OSPEEDR,4*2+1);
-
-	//     MOSI <-- PD6
-	bitclear(GPIOD->MODER,  6*2  );  // 0b10 for AF
-	bitset(  GPIOD->MODER,  6*2+1);
-	bitset(  GPIOD->AFR[0], 6*4  ); // Use AF5 for SPI2_SS 0b0101
-	bitclear(GPIOD->AFR[0], 6*4+1);
-	bitset(  GPIOD->AFR[0], 6*4+2);
-	bitclear(GPIOD->AFR[0], 6*4+3);
-	bitset(  GPIOD->OSPEEDR,6*2);  // OSPEEDR 0b11
-	bitset(  GPIOD->OSPEEDR,6*2+1);
-
-	//     MISO --> PC11
-	bitclear(GPIOC->MODER,  11*2  ); // 0b10 for AF
-	bitset(  GPIOC->MODER,  11*2+1);
-	bitclear(GPIOC->AFR[1], 3*4  );  // Use AF6 for SPI3_SCLK 0b0110
-	bitset(  GPIOC->AFR[1], 3*4+1);
-	bitset(  GPIOC->AFR[1], 3*4+2);
-	bitclear(GPIOC->AFR[1], 3*4+3);
-	bitset(  GPIOC->OSPEEDR,11*2);  // OSPEEDR 0b11
-	bitset(  GPIOC->OSPEEDR,11*2+1);
-
-	SPI3->CR2 |= (0xf<<8)|(3<<2); // CR2[11:8]= 0b1111    16-bit data size
-                                  // CR2[2] = 0b1         SSOE: SS output enable
-	                              // CR2[3] = 0b1         NSSP: NSS pulse management. In the case of a single data transfer, it forces the NSS pin high level after the transfer.
-
-	SPI3->CR1 |= (1<<6);          // Slave, Enable SPI
+// Read a byte from `addr` in the 25LC010A.
+uint32_t read_addr(uint32_t addr) {
+    // write `byte` from `addr`
+    PIN_LOW(GPIOE, CS);
+    spi(INSTR_READ);
+    spi(addr);
+    uint32_t byte = spi(0);
+    while (BIT_READ(SPI1->SR, SPI_SR_BSY_Pos)) {}
+    PIN_HIGH(GPIOE, CS);
+    return byte;
 }
 
-void initLED(){
-	// Set up the mode -- RED -- PA9
-	GPIOA->MODER |= 1<<(9*2); // setting bit 18
-	GPIOA->MODER &= ~(1<<(9*2+1));
-	// Set up the mode -- GREEN  -- PC07 (LED1)
-	GPIOC->MODER |= 1<<(7*2); // setting bit 18
-	GPIOC->MODER &= ~(1<<(7*2+1));
+// Clear the 25LC010A memory to 0.
+void clear(void) {
+    for (int i = 0; i < BUF_LEN; i++) {
+        write_addr(i, 0);
+    }
 }
-void RLEDset(){	    GPIOA->ODR |= 1<<9;}
-void GLEDtoggle(){	GPIOC->ODR ^= 1<<7;}
+
+static char buf[BUF_LEN];
+static uint32_t start = 0;
+static uint32_t len = 0;
+
+void EXTI13_IRQHandler(void) {
+    EXTI->RPR1 |= 1 << 13;
+    // print all of the string data in the 25LC010A
+    for (int i = 0; i < BUF_LEN; i++) {
+        uint32_t data = read_addr(i);
+        if (!data) {
+            break;
+        }
+        lpuart_blocking_printf("%c", data);
+    }
+    // reset everything
+    start = 0;
+    len = 0;
+    clear();
+}
+
+int main(void) {
+    clocks_enable();
+    gpio_clocks_enable();
+    // NOTE: Writing to the 25LC010A is slow, so reducing the baud rate prevents
+    // data loss.
+    lpuart_enable(LPUART_INTERRUPT_DISABLE, 9600);
+    button_enable(BUTTON_INTERRUPT_ENABLE);
+
+    // configure the pins to the correct alternate functions
+    uint32_t pins[PINS] = {CS, SDO, SDI, SCK};
+    for (int i = 1; i < PINS; i++) {
+        uint32_t pin = pins[i];
+        gpio_configure_pin(GPIOE, pin, GPIO_MODE_ALTERNATE, GPIO_OUTPUT_TYPE_PUSH_PULL,
+                           GPIO_SPEED_VERY_HIGH, GPIO_PULLUPDOWN_NO_PULLUP_DOWN);
+        // AF5 = 0b0101
+        uint32_t afr_idx = pin / 8;
+        uint32_t bit_pos = (pin % 8) * 4;
+        BIT_SET(GPIOE->AFR[afr_idx], bit_pos);
+        BIT_CLEAR(GPIOE->AFR[afr_idx], bit_pos + 1);
+        BIT_SET(GPIOE->AFR[afr_idx], bit_pos + 2);
+        BIT_CLEAR(GPIOE->AFR[afr_idx], bit_pos + 3);
+    }
+    // I am manually updating CS, so it it a digital output
+    gpio_configure_pin(GPIOE, CS, GPIO_MODE_OUTPUT, GPIO_OUTPUT_TYPE_PUSH_PULL,
+                       GPIO_SPEED_VERY_HIGH, GPIO_PULLUPDOWN_NO_PULLUP_DOWN);
+
+    // enable SPI1 clock
+    BIT_SET(RCC->APB2ENR, RCC_APB2ENR_SPI1EN_Pos);
+    // master mode
+    BIT_SET(SPI1->CR1, SPI_CR1_MSTR_Pos);
+    // software slave management
+    BIT_SET(SPI1->CR1, SPI_CR1_SSM_Pos);
+    // internal slave select high
+    BIT_SET(SPI1->CR1, SPI_CR1_SSI_Pos);
+    // 8-bit data size
+    SPI1->CR2 |= 0b0111 << SPI_CR2_DS_Pos;
+    // RXNE event is generated if the FIFO level is greater than or equal to 1/4 (8-bit)
+    // NOTE: Since we only want to send bytes, the RXNE must trigger on 8-bit data.
+    BIT_SET(SPI1->CR2, SPI_CR2_FRXTH_Pos);
+    // SPI enable
+    BIT_SET(SPI1->CR1, SPI_CR1_SPE_Pos);
+
+    // clear any garbage data
+    clear();
+    for (;;) {
+        uint32_t c = lpuart_blocking_read();
+        if (c == '\n' || c == '\r') {
+            // append the message into the 25LC010A
+            lpuart_blocking_printf("%d", len);
+            for (int j = 0; j < len; j++) {
+                uint32_t i = (start + j) % BUF_LEN;
+                write_addr(i, buf[i]);
+            }
+            start = (start + len) % BUF_LEN;
+            len = 0;
+        } else {
+            uint32_t i = (start + len++) % BUF_LEN;
+            buf[i] = c;
+        }
+    }
+}
