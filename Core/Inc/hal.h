@@ -51,10 +51,10 @@ void irq_disable(IRQn_Type irqn) {
     } while (0)
 #define PIN_READ(GPIOX, PIN) BIT_READ((GPIOX)->IDR, (PIN))
 
-// Enable the clocks for the A, B, C, and E GPIO ports.
+// Enable the clocks for the A, B, C, E, F, and G GPIO ports.
 void gpio_clocks_enable() {
-    RCC->AHB2ENR |=
-        RCC_AHB2ENR_GPIOAEN | RCC_AHB2ENR_GPIOBEN | RCC_AHB2ENR_GPIOCEN | RCC_AHB2ENR_GPIOEEN;
+    RCC->AHB2ENR |= RCC_AHB2ENR_GPIOAEN | RCC_AHB2ENR_GPIOBEN | RCC_AHB2ENR_GPIOCEN |
+                    RCC_AHB2ENR_GPIOEEN | RCC_AHB2ENR_GPIOFEN | RCC_AHB2ENR_GPIOGEN;
 }
 
 typedef enum {
@@ -347,6 +347,8 @@ void lpuart_blocking_print(char* string) {
         }
     }
 }
+
+#define printlp(...) lpuart_blocking_printf(__VA_ARGS__)
 
 static char _lpuart_blocking_printf_buf[64];
 void lpuart_blocking_printf(const char* fmt, ...) {
