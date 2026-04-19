@@ -1,6 +1,6 @@
 /*
  * Nic Ball
- * Updated 03/13/26
+ * Updated 04/18/26
  * ECE 433
  *
  * General HAL utilities built during the labs for this course.
@@ -15,6 +15,12 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+#define PANIC(...)            \
+    do {                      \
+        printlp(__VA_ARGS__); \
+        for (;;) {}           \
+    } while (0)
 
 #define BIT_SET(INT, BIT) ((INT) |= (1 << (BIT)))
 #define BIT_CLEAR(INT, BIT) ((INT) &= ~(1 << (BIT)))
