@@ -1,6 +1,6 @@
 /*
  * Nic Ball
- * Updated 04/18/26
+ * Updated 04/19/26
  * ECE 433
  *
  * General HAL utilities built during the labs for this course.
@@ -181,24 +181,64 @@ void gpio_configure_push_pull_low_speed(GPIO_TypeDef* port, uint32_t pin, GPIO_M
 
 // CLOCKS
 
-void clocks_enable() {
-    // Enable Clock to SYSCFG & EXTI
-    RCC->APB2ENR |= 1;
-    // Power interface clock
-    RCC->APB1ENR1 |= 1 << 28;
-    // LPUART1 clock
+#define CLOCK_SPEED 108000
+
+void clocks_enable(void) {
+    BIT_SET(RCC->APB2ENR, RCC_APB2ENR_SYSCFGEN_Pos);
+    BIT_SET(RCC->APB1ENR1, RCC_APB1ENR1_PWREN_Pos);
+
+    RCC->APB1ENR1 |= RCC_APB1ENR1_PWREN;
+    PWR->CR1 = (PWR->CR1 & ~PWR_CR1_VOS) | (0b00 << PWR_CR1_VOS_Pos);
+    while (PWR->SR2 & PWR_SR2_VOSF) {}
+
+    FLASH->ACR = (FLASH->ACR & ~FLASH_ACR_LATENCY) | FLASH_ACR_LATENCY_5WS;
+    FLASH->ACR |= (1 << 8);
+
+    RCC->CR |= RCC_CR_HSION;
+    while (!(RCC->CR & RCC_CR_HSIRDY)) {}
+
+    RCC->PLLCFGR = (0b10 << RCC_PLLCFGR_PLLSRC_Pos) | (1 << RCC_PLLCFGR_PLLM_Pos) |
+                   (27 << RCC_PLLCFGR_PLLN_Pos) | (0b00 << RCC_PLLCFGR_PLLR_Pos) |
+                   RCC_PLLCFGR_PLLREN;
+
+    RCC->CR |= RCC_CR_PLLON;
+    while (!(RCC->CR & RCC_CR_PLLRDY)) {}
+
+    RCC->CFGR = (RCC->CFGR & ~RCC_CFGR_SW) | (0x3 << RCC_CFGR_SW_Pos);
+    while ((RCC->CFGR & RCC_CFGR_SWS) != (0x3 << RCC_CFGR_SWS_Pos)) {}
+
+    RCC->APB2ENR |= RCC_APB2ENR_SYSCFGEN;
     RCC->APB1ENR2 |= 0x1;
-    // LPUART1 clock = HSI16
     RCC->CCIPR1 |= 0x800;
     RCC->CCIPR1 &= ~0x400;
-    // SYSCLK = HSI16
-    RCC->CFGR |= 0x1;
-    // Enable MSI + HSI16
-    RCC->CR |= 0x161;
-    // Enable Clock to SYSCFG & EXTI
-    RCC->APB2ENR |= 1;
+
     gpio_clocks_enable();
 }
+
+// TODO: This is not correct...
+// #define CLOCK_SPEED 16000
+//
+// void clocks_enable() {
+//     BIT_SET(RCC->APB2ENR, RCC_APB2ENR_SYSCFGEN_Pos);
+//     BIT_SET(RCC->APB1ENR1, RCC_APB1ENR1_PWREN_Pos);
+//
+//     // Enable Clock to SYSCFG & EXTI
+//     RCC->APB2ENR |= 1;
+//     // Power interface clock
+//     RCC->APB1ENR1 |= 1 << 28;
+//     // LPUART1 clock
+//     RCC->APB1ENR2 |= 0x1;
+//     // LPUART1 clock = HSI16
+//     RCC->CCIPR1 |= 0x800;
+//     RCC->CCIPR1 &= ~0x400;
+//     // SYSCLK = HSI16
+//     RCC->CFGR |= 0x1;
+//     // Enable MSI + HSI16
+//     RCC->CR |= 0x161;
+//     // Enable Clock to SYSCFG & EXTI
+//     RCC->APB2ENR |= 1;
+//     gpio_clocks_enable();
+// }
 
 // TIMERS
 
@@ -213,7 +253,7 @@ void delay_ms(uint32_t ms) {
     // use a RELOAD value of N-1. For example, if the SysTick interrupt is required
     // every 100 clock pulses, set RELOAD to 99.
     // ```
-    SysTick->LOAD = 16000 - 1;
+    SysTick->LOAD = CLOCK_SPEED - 1;
     // Reset val which also resets `SysTick_CTRL_COUNTFLAG_Pos`.
     SysTick->VAL = 0;
     SysTick->CTRL |= SysTick_CTRL_ENABLE_Msk;
@@ -244,7 +284,7 @@ void tim_enable_interrupt(TIM_TypeDef* tim, IRQn_Type interrupt, uint32_t period
     }
 
     tim->CR1 = 0;
-    tim->PSC = 16 * prescalar - 1;
+    tim->PSC = (CLOCK_SPEED / 1000) * prescalar - 1;
     tim->ARR = period - 1;
     tim->CNT = 0;
     BIT_SET(tim->DIER, TIM_DIER_UIE_Pos);
@@ -271,7 +311,7 @@ void tim_enable(TIM_TypeDef* tim, uint32_t period, uint32_t prescalar) {
 
     tim->CR1 = 0;
     // 1ms tick
-    tim->PSC = 16 * prescalar - 1;
+    tim->PSC = (CLOCK_SPEED / 1000) * prescalar - 1;
     tim->ARR = period - 1;
     // Clear counter
     tim->CNT = 0;
@@ -613,6 +653,25 @@ float mcp9701_to_fahrenheit(uint32_t adc_value) {
     float v0 = 0.4f;
     float ta_celsius = (vout - v0) / tc;
     return (ta_celsius * 1.8) + 32.0f;
+}
+
+// DEBUG
+
+static uint32_t _perf_start;
+void perf_configure(void) {
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CYCCNT = 0;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+}
+void perf_start(void) {
+    _perf_start = DWT->CYCCNT;
+}
+void perf_end(const char* label) {
+    uint32_t cycles = DWT->CYCCNT - _perf_start;
+    float ms = (float)cycles / (108000000.0 / 1000.0);
+    char buf[100];
+    format_float(buf, ms);
+    printlp("%s: %sms ", label, buf);
 }
 
 #endif // HAL_H

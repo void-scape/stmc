@@ -1,6 +1,8 @@
 # STMc
 
-STM32L5 fractal renderer.
+STM32L5 fractal renderer. No HALs were used, everything is built from the ground
+up, excluding useful defines, system initialization, and stuff I didn't feel like
+removing! All the STM bloat is in `drivers`.
 
 ## Components
 - [STM Dev Board](https://www.digipart.com/part/NUCLEO-L552ZE-Q?msclkid=4b240ee1a4311ececccf6705e8bea0b9&utm_source=bing&utm_medium=cpc&utm_campaign=Tier_Popular&utm_term=NUCLEO-L552ZE-Q&utm_content=Tier_Popular_1)

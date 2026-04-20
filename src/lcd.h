@@ -1,7 +1,12 @@
+#ifndef LCD_H
+#define LCD_H
+
 #include "hal.h"
 
 #define LCD_WIDTH 240
 #define LCD_HEIGHT 320
+
+static uint16_t pixels[LCD_WIDTH * LCD_HEIGHT];
 
 #define CS 9
 #define CS_P GPIOF
@@ -18,14 +23,14 @@
 #define SDI 15
 #define SCK 13
 
-void spi_byte(uint8_t byte) {
+static inline void spi_byte(uint8_t byte) {
     while (!BIT_READ(SPI1->SR, SPI_SR_TXE_Pos)) {}
     *(volatile uint8_t*)&SPI1->DR = byte;
     while (BIT_READ(SPI1->SR, SPI_SR_BSY_Pos)) {}
     (void)SPI1->DR;
 }
 
-void spi1_lcd(void) {
+static void spi1_lcd(void) {
     BIT_CLEAR(SPI1->CR1, SPI_CR1_SPE_Pos);
     // 8-bit data size
     SPI1->CR2 = (SPI1->CR2 & ~SPI_CR2_DS_Msk) | (0b0111 << SPI_CR2_DS_Pos);
@@ -36,7 +41,7 @@ void spi1_lcd(void) {
     BIT_SET(SPI1->CR1, SPI_CR1_SPE_Pos);
 }
 
-void spi1_dma(void) {
+static void spi1_dma(void) {
     PIN_LOW(CS_P, CS);
     PIN_HIGH(DC_P, DC);
     BIT_CLEAR(SPI1->CR1, SPI_CR1_SPE_Pos);
@@ -48,7 +53,7 @@ void spi1_dma(void) {
     BIT_SET(DMA1_Channel1->CCR, DMA_CCR_EN_Pos);
 }
 
-void spi1_lcd_enable(void) {
+static void spi1_lcd_enable(void) {
     // configure the pins
     gpio_configure_push_pull_low_speed(DC_P, DC, GPIO_MODE_OUTPUT);
     gpio_configure_push_pull_low_speed(RST_P, RST, GPIO_MODE_OUTPUT);
@@ -86,21 +91,21 @@ void spi1_lcd_enable(void) {
     spi1_lcd();
 }
 
-void lcd_write_cmd(uint32_t cmd) {
+static inline void lcd_write_cmd(uint32_t cmd) {
     PIN_LOW(CS_P, CS);
     PIN_LOW(DC_P, DC);
     spi_byte(cmd);
     PIN_HIGH(CS_P, CS);
 }
 
-void lcd_write_data(uint32_t data) {
+static inline void lcd_write_data(uint32_t data) {
     PIN_LOW(CS_P, CS);
     PIN_HIGH(DC_P, DC);
     spi_byte(data);
     PIN_HIGH(CS_P, CS);
 }
 
-void lcd_reset(void) {
+static void lcd_reset(void) {
     PIN_HIGH(CS_P, CS);
     delay_ms(100);
     PIN_LOW(RST_P, RST);
@@ -109,7 +114,7 @@ void lcd_reset(void) {
     delay_ms(100);
 }
 
-void lcd_init_sequence(void) {
+static void lcd_init_sequence(void) {
     lcd_write_cmd(0x36);
     lcd_write_data(0x00);
 
@@ -201,14 +206,14 @@ void lcd_init_sequence(void) {
     lcd_write_cmd(0x29);
 }
 
-void lcd_init(void) {
+static void lcd_init(void) {
     spi1_lcd();
     lcd_reset();
     lcd_init_sequence();
 }
 
 // sets the cursor to the top left and defines the size of the draw window
-void lcd_prepare_for_render(void) {
+static void lcd_prepare_for_render(void) {
     spi1_lcd();
 
     lcd_write_cmd(0x2a);
@@ -226,9 +231,7 @@ void lcd_prepare_for_render(void) {
     lcd_write_cmd(0x2C);
 }
 
-static uint16_t pixels[LCD_WIDTH * LCD_HEIGHT];
-
-void dma_lcd_enable(void) {
+static void dma_lcd_enable(void) {
     // enable clock
     RCC->AHB1ENR |= RCC_AHB1ENR_DMA1EN;
     RCC->AHB1ENR |= RCC_AHB1ENR_DMAMUX1EN;
@@ -284,3 +287,5 @@ void lcd_hal_init(void) {
     lcd_prepare_for_render();
     spi1_dma();
 }
+
+#endif // LCD_H

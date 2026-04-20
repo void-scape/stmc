@@ -1,7 +1,7 @@
 TARGET = stmc
 OPT = -O3
 BUILD_DIR = build
-C_SOURCES = src/main.c
+C_SOURCES = src/main.c drivers/system.c
 ASM_SOURCES = drivers/startup_stm32l552xx.s
 
 PREFIX = arm-none-eabi-
