@@ -6,15 +6,15 @@
 #define LCD_WIDTH 240
 #define LCD_HEIGHT 320
 
-static uint16_t pixels[LCD_WIDTH * LCD_HEIGHT];
+uint16_t pixels[LCD_WIDTH * LCD_HEIGHT];
 
-#define CS 9
-#define CS_P GPIOF
+#define CS 1
+#define CS_P GPIOD
 
-#define DC 0
-#define DC_P GPIOG
+#define DC 9
+#define DC_P GPIOF
 
-#define RST 1
+#define RST 0
 #define RST_P GPIOG
 
 #define BL 7
@@ -25,7 +25,7 @@ static uint16_t pixels[LCD_WIDTH * LCD_HEIGHT];
 
 static inline void spi_byte(uint8_t byte) {
     while (!BIT_READ(SPI1->SR, SPI_SR_TXE_Pos)) {}
-    *(volatile uint8_t*)&SPI1->DR = byte;
+    *(volatile uint8_t *)&SPI1->DR = byte;
     while (BIT_READ(SPI1->SR, SPI_SR_BSY_Pos)) {}
     (void)SPI1->DR;
 }
@@ -34,8 +34,9 @@ static void spi1_lcd(void) {
     BIT_CLEAR(SPI1->CR1, SPI_CR1_SPE_Pos);
     // 8-bit data size
     SPI1->CR2 = (SPI1->CR2 & ~SPI_CR2_DS_Msk) | (0b0111 << SPI_CR2_DS_Pos);
-    // RXNE event is generated if the FIFO level is greater than or equal to 1/4 (8-bit)
-    // NOTE: Since we only want to send bytes, the RXNE must trigger on 8-bit data.
+    // RXNE event is generated if the FIFO level is greater than or equal to 1/4
+    // (8-bit) NOTE: Since we only want to send bytes, the RXNE must trigger on
+    // 8-bit data.
     BIT_SET(SPI1->CR2, SPI_CR2_FRXTH_Pos);
     BIT_CLEAR(SPI1->CR2, SPI_CR2_TXDMAEN_Pos);
     BIT_SET(SPI1->CR1, SPI_CR1_SPE_Pos);
@@ -58,15 +59,16 @@ static void spi1_lcd_enable(void) {
     gpio_configure_push_pull_low_speed(DC_P, DC, GPIO_MODE_OUTPUT);
     gpio_configure_push_pull_low_speed(RST_P, RST, GPIO_MODE_OUTPUT);
     gpio_configure_push_pull_low_speed(BL_P, BL, GPIO_MODE_OUTPUT);
-    gpio_configure_pin(CS_P, CS, GPIO_MODE_OUTPUT, GPIO_OUTPUT_TYPE_PUSH_PULL, GPIO_SPEED_VERY_HIGH,
-                       GPIO_PULLUPDOWN_NO_PULLUP_DOWN);
+    gpio_configure_pin(CS_P, CS, GPIO_MODE_OUTPUT, GPIO_OUTPUT_TYPE_PUSH_PULL,
+                       GPIO_SPEED_VERY_HIGH, GPIO_PULLUPDOWN_NO_PULLUP_DOWN);
 
     // configure the pins to the correct alternate functions
     uint32_t pins[] = {SDI, SCK};
     for (int i = 0; i < 2; i++) {
         uint32_t pin = pins[i];
-        gpio_configure_pin(GPIOE, pin, GPIO_MODE_ALTERNATE, GPIO_OUTPUT_TYPE_PUSH_PULL,
-                           GPIO_SPEED_VERY_HIGH, GPIO_PULLUPDOWN_NO_PULLUP_DOWN);
+        gpio_configure_pin(GPIOE, pin, GPIO_MODE_ALTERNATE,
+                           GPIO_OUTPUT_TYPE_PUSH_PULL, GPIO_SPEED_VERY_HIGH,
+                           GPIO_PULLUPDOWN_NO_PULLUP_DOWN);
         // AF5 = 0b0101
         uint32_t afr_idx = pin / 8;
         uint32_t bit_pos = (pin % 8) * 4;
@@ -87,6 +89,9 @@ static void spi1_lcd_enable(void) {
     BIT_SET(SPI1->CR1, SPI_CR1_SSM_Pos);
     // internal slave select high
     BIT_SET(SPI1->CR1, SPI_CR1_SSI_Pos);
+
+    // turn on lcd
+    PIN_HIGH(BL_P, BL);
 
     spi1_lcd();
 }

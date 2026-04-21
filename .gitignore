@@ -1,4 +1,9 @@
+/.venv
 /build
 /.ccls-cache
+/.cache
 /ref
 compile_commands.json
+flash.sh
+debug.sh
+server.sh
